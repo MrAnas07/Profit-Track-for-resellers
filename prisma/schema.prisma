@@ -1,0 +1,124 @@
+// ProfitTrack — multi-user cloud schema (Clerk + Neon PostgreSQL)
+// Every tenant table carries `userId` so data stays isolated per user.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// A Clerk-authenticated end user. Row is created on first sign-in.
+model User {
+  id        String   @id // Clerk user ID, e.g. "user_2f..."
+  email     String?  @unique
+  name      String?
+  imageUrl  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  supplierGroups SupplierGroup[]
+  categories     Category[]
+  products       Product[]
+  priceOptions   PriceOption[]
+  priceHistory   PriceHistory[]
+}
+
+model SupplierGroup {
+  id        Int      @id @default(autoincrement())
+  userId    String
+  name      String
+  createdAt DateTime @default(now())
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  products Product[]
+
+  // One group name per user (matches app-level uniqueness).
+  @@unique([userId, name])
+  @@index([userId])
+}
+
+model Category {
+  id        Int      @id @default(autoincrement())
+  userId    String
+  name      String
+  createdAt DateTime @default(now())
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  products Product[]
+
+  @@unique([userId, name])
+  @@index([userId])
+}
+
+enum ProductStatus {
+  available
+  pending
+  sold
+}
+
+model Product {
+  id              Int           @id @default(autoincrement())
+  userId          String
+  name            String
+  details         String        @default("")
+  status          ProductStatus @default(pending)
+  quantity        Int           @default(1)
+  supplierGroupId Int
+  categoryId      Int?
+  /// Raw WhatsApp message the product was extracted from (if any).
+  originalMessage String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Restrict mirrors the UI rule: groups with products cannot be deleted.
+  supplierGroup SupplierGroup @relation(fields: [supplierGroupId], references: [id], onDelete: Restrict)
+  category      Category?     @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  priceOptions PriceOption[]
+  priceHistory PriceHistory[]
+
+  @@index([userId])
+  @@index([userId, status])
+  @@index([userId, supplierGroupId])
+}
+
+/// A price variant of a product (cost/sell pair).
+/// `id` is a client-generated uuid — kept stable across renames.
+model PriceOption {
+  id        String  @id
+  userId    String
+  productId Int
+  name      String  @default("") // empty = "Standard"
+  costPrice Float
+  sellPrice Float
+  sortOrder Int     @default(0)
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([productId, sortOrder])
+}
+
+/// Immutable log of price changes (denormalised option id/name so history
+/// survives option deletion).
+model PriceHistory {
+  id         Int      @id @default(autoincrement())
+  userId     String
+  productId  Int
+  optionId   String?
+  optionName String   @default("")
+  costPrice  Float
+  sellPrice  Float
+  at         DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([productId])
+}
